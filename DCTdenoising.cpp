@@ -119,6 +119,8 @@ inline void ExtractPatch(const Image &src, int pr, int pc, DCTPatch *dst) {
  */
 inline pair<Image, Image> DCTsteps(const Image &noisy, const Image &guide,
                          const float sigma, const int dct_sz,
+                         const vector<float> &dct_sigma_lut_bins,
+                         const vector<imgutils::Image> &dct_sigma_lut,
                          bool adaptive_aggregation, const bool guided) {
   Image result(noisy.rows(), noisy.columns(), noisy.channels());
   Image weights(noisy.rows(), noisy.columns());
@@ -127,6 +129,8 @@ inline pair<Image, Image> DCTsteps(const Image &noisy, const Image &guide,
   DCTPatch gpatch(dct_sz, dct_sz, noisy.channels()); // unused if !guided
   for (int pr = 0; pr <= noisy.rows() - dct_sz; ++pr) {
     for (int pc = 0; pc <= noisy.columns() - dct_sz; ++pc) {
+//for (int pr = 0; pr <= noisy.rows() - dct_sz; pr += dct_sz) {
+//  for (int pc = 0; pc <= noisy.columns() - dct_sz; pc += dct_sz) {
       // starts processing of a single patch
       float wP = 0; // adaptive aggregation weight
       ExtractPatch(noisy, pr, pc, &patch);
@@ -137,29 +141,47 @@ inline pair<Image, Image> DCTsteps(const Image &noisy, const Image &guide,
         gpatch.ToFreq();
       }
 
+      bool use_lut = (dct_sigma_lut_bins.size() > 0);
+
       for (int chan = 0; chan < noisy.channels(); ++chan) {
+
+        int lut_bin = -1;
+        if (use_lut) {
+          float lut_step = dct_sigma_lut_bins[1] - dct_sigma_lut_bins[0];
+          float lut_min = dct_sigma_lut_bins[0] - lut_step/2.;
+
+          // determine noise power from noise variance LUT
+          float mean_val = ((guided) ? gpatch.freq(0,0,chan) : patch.freq(0,0,chan))/(float)dct_sz;
+          lut_bin = std::max(0,std::min((int)floor((mean_val - lut_min)/lut_step),
+                                        (int)dct_sigma_lut_bins.size()-1));
+//        printf("%d %f %f %f\n", lut_bin, dct_sigma_lut_bins[lut_bin]-lut_step/2, mean_val,
+//                                         dct_sigma_lut_bins[lut_bin]+lut_step/2);
+        }
+
+
         for (int row = 0; row < dct_sz; ++row) {
           for (int col = 0; col < dct_sz; ++col) {
+
+            float sigma_rowcol = (use_lut) ? sqrt(dct_sigma_lut[lut_bin].val(col, row)/30.f)
+                                           : sigma;
 
             if (guided) {   // Wiener filtering with oracle guide
               if (row || col) {
                 float G = gpatch.freq(col, row, chan);
-                float w = (G * G) / (G * G + sigma * sigma);
+                float w = (G * G) / (G * G + sigma_rowcol * sigma_rowcol);
                 patch.freq(col, row, chan) *= w;
                 // add to weights excluding DC
                 wP += w*w;
               }
             } else {        // Hard thresholding
               if (row || col) {
-                if (abs(patch.freq(col, row, chan)) < HARD_THRESHOLD * sigma) {
+                if (abs(patch.freq(col, row, chan)) < HARD_THRESHOLD * sigma_rowcol) {
                   patch.freq(col, row, chan) = 0.f;
                 } else { // count ALL nonzero frequencies excluding DC
                   wP++;
                 }
               }
-              
             }
-
           }
         }
       }
@@ -194,9 +216,13 @@ inline pair<Image, Image> DCTsteps(const Image &noisy, const Image &guide,
  */
 inline pair<Image, Image> step1(const Image &noisy,
                          const float sigma, const int dct_sz,
+                         const vector<float> &dct_sigma_lut_bins,
+                         const vector<imgutils::Image> &dct_sigma_lut,
                          bool adaptive_aggregation) {
   Image dummyguide; // dummy guide
-  return DCTsteps(noisy, dummyguide, sigma, dct_sz, adaptive_aggregation, false);
+  return DCTsteps(noisy, dummyguide, sigma, dct_sz,
+                  dct_sigma_lut_bins, dct_sigma_lut,
+                  adaptive_aggregation, false);
 }
 
 /*! \brief wrapper for DCTsteps in case of Wiener filtering
@@ -205,8 +231,12 @@ inline pair<Image, Image> step1(const Image &noisy,
  */
 inline pair<Image, Image> step2(const Image &noisy, const Image &guide,
                          const float sigma, const int dct_sz,
+                         const vector<float> &dct_sigma_lut_bins,
+                         const vector<imgutils::Image> &dct_sigma_lut,
                          bool adaptive_aggregation) {
-  return DCTsteps(noisy, guide, sigma, dct_sz, adaptive_aggregation, true);
+  return DCTsteps(noisy, guide, sigma, dct_sz,
+                  dct_sigma_lut_bins, dct_sigma_lut,
+                  adaptive_aggregation, true);
 }
 
 
@@ -218,7 +248,10 @@ inline pair<Image, Image> step2(const Image &noisy, const Image &guide,
  * Returns a denoised image
  */
 inline Image DCTdenoisingBoth(const Image &noisy, const Image &guide, float sigma,
-                       int dct_sz, bool adaptive_aggregation,
+                       int dct_sz,
+                       const vector<float> &dct_sigma_lut_bins,
+                       const vector<imgutils::Image> &dct_sigma_lut,
+                       bool adaptive_aggregation,
                        const bool guided, int nthreads) {
 #ifdef _OPENMP
   if (!nthreads) nthreads = omp_get_max_threads();  // number of threads
@@ -245,10 +278,12 @@ inline Image DCTdenoisingBoth(const Image &noisy, const Image &guide, float sigm
   for (int i = 0; i < nthreads; ++i) {
     if (guided) { // Wiener filtering
       result_tiles[i] = step2(noisy_tiles[i], guide_tiles[i],
-                              sigma, dct_sz, adaptive_aggregation);
+                              sigma, dct_sz, dct_sigma_lut_bins,
+                              dct_sigma_lut, adaptive_aggregation);
     } else {      // Hard thresholding
       result_tiles[i] = step1(noisy_tiles[i],
-                              sigma, dct_sz, adaptive_aggregation);
+                              sigma, dct_sz, dct_sigma_lut_bins,
+                              dct_sigma_lut, adaptive_aggregation);
     }
   }
 
@@ -262,8 +297,12 @@ inline Image DCTdenoisingBoth(const Image &noisy, const Image &guide, float sigm
  * Returns the denoised image
  */
 Image DCTdenoisingGuided(const Image &noisy, const Image &guide, float sigma,
-                         int dct_sz, bool adaptive_aggregation, int nthreads) {
+                         int dct_sz,
+                         const vector<float> &dct_sigma_lut_bins,
+                         const vector<imgutils::Image> &dct_sigma_lut,
+                         bool adaptive_aggregation, int nthreads) {
   return DCTdenoisingBoth(noisy, guide, sigma, dct_sz,
+                          dct_sigma_lut_bins, dct_sigma_lut,
                           adaptive_aggregation, true, nthreads);
 }
 
@@ -271,10 +310,13 @@ Image DCTdenoisingGuided(const Image &noisy, const Image &guide, float sigma,
  *
  * Returns the denoised image
  */
-Image DCTdenoising(const Image &noisy, float sigma,
-                   int dct_sz, bool adaptive_aggregation, int nthreads) {
+Image DCTdenoising(const Image &noisy, float sigma, int dct_sz,
+                   const vector<float> &dct_sigma_lut_bins,
+                   const vector<imgutils::Image> &dct_sigma_lut,
+                   bool adaptive_aggregation, int nthreads) {
   Image dummyguide;
   return DCTdenoisingBoth(noisy, dummyguide, sigma, dct_sz,
+                          dct_sigma_lut_bins, dct_sigma_lut,
                           adaptive_aggregation, false, nthreads);
 }
 
