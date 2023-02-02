@@ -291,4 +291,61 @@ Image recompose(const vector<Image> &pyramid, float recompose_factor) {
   return output;
 }
 
+
+std::vector<float> window_function(const std::string& window_type, int size)
+{
+	const float N = (float)size;
+	const float N2 = (N - 1.)/2.;
+	const float PI = 3.14159265358979323846;
+	std::vector<float> w1(size);
+
+	if (window_type == "parzen")
+		for (int n = 0; n < size; ++n)
+		{
+			float nc = (float)n - N2;
+			w1[n] = (fabs(nc) <= N/4.)
+			      ? 1. - 24.*nc*nc/N/N*(1. - 2./N*fabs(nc))
+					: 2.*pow(1. - 2./N*fabs(nc), 3.);
+		}
+	else if (window_type == "welch")
+		for (int n = 0; n < size; ++n)
+		{
+			const float nc = ((float)n - N2)/N2;
+			w1[n] = 1. - nc*nc;
+		}
+	else if (window_type == "sine")
+		for (int n = 0; n < size; ++n)
+			w1[n] = sin(PI*(float)n/(N-1));
+	else if (window_type == "hanning")
+		for (int n = 0; n < size; ++n)
+		{
+			w1[n] = sin(PI*(float)n/(N-1));
+			w1[n] *= w1[n];
+		}
+	else if (window_type == "hamming")
+		for (int n = 0; n < size; ++n)
+			w1[n] = 0.54 - 0.46*cos(2*PI*(float)n/(N-1));
+	else if (window_type == "blackman")
+		for (int n = 0; n < size; ++n)
+			w1[n] = 0.42 - 0.5*cos(2*PI*(float)n/(N-1)) + 0.08*cos(4*PI*n/(N-1));
+	else if (window_type == "gaussian")
+		for (int n = 0; n < size; ++n)
+		{
+			const float s = .4; // scale parameter for the Gaussian
+			const float x = ((float)n - N2)/N2/s;
+			w1[n] = exp(-.5*x*x);
+		}
+	else // default is the flat window
+		for (int n = 0; n < size; ++n)
+			w1[n] = 1.f;
+
+	// 2D separable window
+	std::vector<float> w2(size*size);
+	for (int i = 0; i < size; ++i)
+	for (int j = 0; j < size; ++j)
+		w2[i*size + j] = w1[i]*w1[j];
+
+	return w2;
+}
+
 }  // namespace imgutils

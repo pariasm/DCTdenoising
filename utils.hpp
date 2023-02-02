@@ -22,6 +22,8 @@ void idct_inplace(Image &img);
 std::vector<Image> decompose(const Image &img, int levels);
 Image recompose(const std::vector<Image> &pyramid, float recompose_factor);
 
+std::vector<float> window_function(const std::string& window_type, int size);
+
 }  // namespace imgutils
 
 #endif //IMGUTILS_UTILS_HPP

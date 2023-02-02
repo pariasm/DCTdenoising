@@ -125,12 +125,15 @@ inline pair<Image, Image> DCTsteps(const Image &noisy, const Image &guide,
   Image result(noisy.rows(), noisy.columns(), noisy.channels());
   Image weights(noisy.rows(), noisy.columns());
 
+//std::vector<float> agg_window = imgutils::window_function("gaussian", dct_sz);
+  std::vector<float> agg_window = imgutils::window_function("constant", dct_sz);
+
   DCTPatch patch(dct_sz, dct_sz, noisy.channels());
   DCTPatch gpatch(dct_sz, dct_sz, noisy.channels()); // unused if !guided
   for (int pr = 0; pr <= noisy.rows() - dct_sz; ++pr) {
     for (int pc = 0; pc <= noisy.columns() - dct_sz; ++pc) {
-//for (int pr = 0; pr <= noisy.rows() - dct_sz; pr += dct_sz) {
-//  for (int pc = 0; pc <= noisy.columns() - dct_sz; pc += dct_sz) {
+//for (int pr = 0; pr <= noisy.rows() - dct_sz; pr += dct_sz/4+2) {
+//  for (int pc = 0; pc <= noisy.columns() - dct_sz; pc += dct_sz/4+2) {
       // starts processing of a single patch
       float wP = 0; // adaptive aggregation weight
       ExtractPatch(noisy, pr, pc, &patch);
@@ -194,15 +197,15 @@ inline pair<Image, Image> DCTsteps(const Image &noisy, const Image &guide,
 
       // Aggregation of the patch
       for (int ch = 0; ch < noisy.channels(); ++ch) {
-        for (int row = 0; row < dct_sz; ++row) {
-          for (int col = 0; col < dct_sz; ++col) {
-            result.val(col + pc, row + pr, ch) += patch.space(col, row, ch)*wP;
+        for (int row = 0, kk = 0; row < dct_sz; ++row) {
+          for (int col = 0; col < dct_sz; ++col, ++kk) {
+            result.val(col + pc, row + pr, ch) += patch.space(col, row, ch)*wP*agg_window[kk];
           }
         }
       }
-      for (int row = 0; row < dct_sz; ++row) {
-        for (int col = 0; col < dct_sz; ++col) {
-          weights.val(col + pc, row + pr) += 1.f*wP;
+      for (int row = 0, kk = 0; row < dct_sz; ++row) {
+        for (int col = 0; col < dct_sz; ++col, ++kk) {
+          weights.val(col + pc, row + pr) += 1.f*wP*agg_window[kk];
         }
       }
     }
